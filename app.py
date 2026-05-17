@@ -1,0 +1,272 @@
+import streamlit as st
+from datetime import datetime, timezone
+import numpy as np
+import pandas as pd
+from sklearn.preprocessing import MinMaxScaler
+import tensorflow as tf
+import requests
+import json
+import os
+import time
+
+currenttime = int(time.time())
+
+st.title("유니폼 가격 예측 모델")
+st.write(
+    "레사모 거래 데이터를 기반으로 유니폼의 예상 거래 가격을 예측하는 웹앱입니다."
+)
+
+with st.expander("사용방법", expanded=True):
+    st.markdown("""
+        1. [4mation Kit Archive](https://4mation.net/kit-archive)에 접속합니다.
+        2. 가격을 알고 싶은 유니폼을 클릭합니다.
+        3. 열린 페이지 URL의 마지막 숫자 코드를 복사합니다.
+        4. 아래 유니폼 코드 입력칸에 붙여넣습니다.
+        5. 거래 데이터를 불러온 뒤, 사이즈·등급·마킹·패치 정보를 입력하면 예상 가격을 확인할 수 있습니다.
+
+        예시 URL:
+
+        `https://4mation.net/kit-archive/12345`
+
+        입력할 유니폼 코드:
+
+        `12345`
+        """)
+유니폼코드 = st.text_input("유니폼 코드 : ")
+
+size_map = {
+    "S": 0,
+    "s": 0,
+    "M": 1,
+    "m": 1,
+    "L": 2,
+    "l": 2,
+    "XL": 3,
+    "xl": 3,
+    "2XL": 4,
+    "2xl": 4,
+    "3XL": 5,
+    "3xl": 5,
+    "해외 S": 0,
+    "해외 s": 0,
+    "해외 M": 1,
+    "해외 m": 1,
+    "해외 L": 2,
+    "해외 l": 2,
+    "해외 XL": 3,
+    "해외 xl": 3,
+    "해외 2XL": 4,
+    "해외 2xl": 4,
+    "해외 3XL": 5,
+    "해외 3xl": 5,
+    "국내 S": 0,
+    "국내 s": 0,
+    "국내 M": 0,
+    "국내 m": 0,
+    "국내 L": 1,
+    "국내 l": 1,
+    "국내 XL": 2,
+    "국내 xl": 2,
+    "국내 2XL": 2.5,
+    "국내 2xl": 2.5,
+    "국내 3XL": 3,
+    "국내 3xl": 3,
+    "국내 4XL": 3.5,
+    "국내 4xl": 3.5,
+}
+
+true_false_map = {True: 1, False: 0, None: 0, 0: 0, 1: 1}
+
+
+def iso8601_z_to_timestamp(s: str) -> int:
+    if not s:
+        return 0
+
+    original = s
+
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+
+    try:
+        return int(datetime.fromisoformat(s).timestamp())
+    except ValueError:
+        for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ"):
+            try:
+                dt = datetime.strptime(original, fmt)
+                return int(dt.replace(tzinfo=timezone.utc).timestamp())
+            except ValueError:
+                continue
+
+    raise ValueError(f"지원하지 않는 시간 포맷: {original}")
+
+
+def 거래데이터수집(유니폼코드, price_list, size_map, true_false_map):
+    filename = f"{유니폼코드}.csv"
+
+    with open(filename, "w", encoding="utf-8-sig") as file:
+        file.write(
+            "유니폼코드,사이즈,등급,마킹번호,마킹오피셜,패치유무,패치오피셜,등록일,가격\n"
+        )
+
+        for i in price_list:
+            if "size" in i and "price" in i and "grade" in i:
+                size = i.get("size", "")
+                price = i.get("price", "")
+                grade = i.get("grade", "")
+                sellingtime = i.get("datetime", "")
+
+                timestamp = iso8601_z_to_timestamp(sellingtime)
+
+                marking = i.get("marking", {}) or {}
+                patch = i.get("patch", {}) or {}
+
+                marking_number = marking.get("marking_number", 0) or 0
+                marking_official = marking.get("official", 0)
+                is_patch = patch.get("is_patch", 0)
+                patch_official = patch.get("official", 0)
+
+                if isinstance(size, list) and len(size) > 0:
+                    size_value = size_map.get(size[0], -1)
+                else:
+                    size_value = size_map.get(size, -1)
+
+                file.write(
+                    f"{int(유니폼코드)},{size_value},{grade},{marking_number},{true_false_map.get(marking_official, 0)},{true_false_map.get(is_patch, 0)},{true_false_map.get(patch_official, 0)},{timestamp},{price}\n"
+                )
+
+    return filename
+
+
+if st.button("거래 데이터 불러오기 및 모델 학습"):
+    if not 유니폼코드:
+        st.warning("유니폼 코드를 입력하세요.")
+        st.stop()
+
+    try:
+        uniform_code_value = int(유니폼코드)
+    except ValueError:
+        st.error("유니폼 코드는 숫자로 입력해야 합니다.")
+        st.stop()
+
+    url = f"https://4mation.net/api/product/detail/{유니폼코드}"
+
+    try:
+        data = requests.get(url, timeout=10)
+    except requests.exceptions.RequestException:
+        st.error("API 요청 중 문제가 발생했습니다.")
+        st.stop()
+
+    if data.status_code != 200:
+        st.error("API 요청에 실패했습니다.")
+        st.stop()
+
+    딕셔너리 = data.json()
+
+    if "result" not in 딕셔너리 or "price_list" not in 딕셔너리["result"]:
+        st.error("거래 데이터 price_list를 찾을 수 없습니다.")
+        st.stop()
+
+    price_list = 딕셔너리["result"]["price_list"]
+
+    filename = 거래데이터수집(유니폼코드, price_list, size_map, true_false_map)
+
+    df = pd.read_csv(filename, encoding="utf-8-sig")
+
+    if os.path.exists(filename):
+        os.remove(filename)
+
+    if len(df) < 5:
+        st.warning("학습에 사용할 거래 데이터가 너무 적습니다.")
+        st.dataframe(df)
+        st.stop()
+
+    st.subheader("수집된 거래 데이터")
+    st.dataframe(df)
+
+    x_train = df.drop("가격", axis=1)
+    y_train = df["가격"]
+
+    scaler = MinMaxScaler()
+    x_train_scaled = scaler.fit_transform(x_train)
+
+    model = tf.keras.Sequential(
+        [
+            tf.keras.layers.Dense(64, activation="relu", input_shape=(8,)),
+            tf.keras.layers.BatchNormalization(),
+            tf.keras.layers.Dense(128, activation="relu"),
+            tf.keras.layers.Dropout(0.3),
+            tf.keras.layers.Dense(64, activation="relu"),
+            tf.keras.layers.Dense(1),
+        ]
+    )
+
+    model.compile(optimizer="adam", loss="mae")
+
+    with st.spinner("모델 학습 중입니다."):
+        model.fit(x_train_scaled, y_train, epochs=200, verbose=0)
+
+    st.session_state["model"] = model
+    st.session_state["scaler"] = scaler
+    st.session_state["uniform_code_value"] = uniform_code_value
+
+    st.success("모델 학습이 완료되었습니다.")
+
+
+st.subheader("가격 예측")
+
+size = st.selectbox("US사이즈를 선택하세요", ["S", "M", "L", "XL", "2XL", "3XL"])
+
+grade = st.number_input(
+    "등급을 입력하세요",
+    min_value=1,
+    max_value=6,
+    value=3,
+    help="미개봉: 1, 개봉새제품: 2, S급: 3, A급: 4, B급: 5, C급: 6",
+)
+
+marking_number = st.number_input(
+    "마킹 번호를 입력하세요. 마킹이 없다면 0", min_value=0, value=0
+)
+
+if marking_number == 0:
+    marking_official = 0
+else:
+    marking_official = st.number_input(
+        "마킹 오피셜이면 1, 아니면 0", min_value=0, max_value=1, value=1
+    )
+
+patch = st.number_input("패치 있으면 1, 없으면 0", min_value=0, max_value=1, value=0)
+
+if patch == 0:
+    patch_official = 0
+else:
+    patch_official = st.number_input(
+        "패치 오피셜이면 1, 아니면 0", min_value=0, max_value=1, value=1
+    )
+
+if st.button("가격 예측하기"):
+    if "model" not in st.session_state or "scaler" not in st.session_state:
+        st.warning("먼저 거래 데이터를 불러오고 모델을 학습하세요.")
+        st.stop()
+
+    model = st.session_state["model"]
+    scaler = st.session_state["scaler"]
+    uniform_code_value = st.session_state["uniform_code_value"]
+
+    user_input = [
+        uniform_code_value,
+        size_map.get(size),
+        grade,
+        marking_number,
+        marking_official,
+        patch,
+        patch_official,
+        currenttime,
+    ]
+
+    user_input_scaled = scaler.transform([user_input])
+    예측값 = model.predict(user_input_scaled)
+
+    predicted_price = round(float(예측값[0][0]))
+
+    st.success(f"예측된 가격: {predicted_price:,} 원")
