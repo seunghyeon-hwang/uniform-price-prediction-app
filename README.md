@@ -37,22 +37,7 @@ Feature	설명
 패치오피셜	오피셜 패치 여부
 등록일	거래 등록 시간(timestamp)
 
-프로젝트 구조
-uniform-price-prediction-app/
-│
-├─ app.py
-├─ requirements.txt
-└─ README.md
 
-실행 방법
-1. 프로젝트 클론
-git clone https://github.com/너의아이디/uniform-price-prediction-app.git
-2. 프로젝트 폴더 이동
-cd uniform-price-prediction-app
-3. 라이브러리 설치
-pip install -r requirements.txt
-4. Streamlit 실행
-streamlit run app.py
 주요 구현 내용
 requests 기반 API 데이터 수집
 JSON 데이터 파싱 및 전처리
