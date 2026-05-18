@@ -9,6 +9,12 @@ import json
 import os
 import time
 
+st.set_page_config(
+    page_title="유니폼 가격 예측기",
+    page_icon="⚽",
+    layout="centered",
+    initial_sidebar_state="auto",
+)
 currenttime = int(time.time())
 
 st.title("유니폼 가격 예측 모델")
@@ -271,3 +277,26 @@ if st.button("가격 예측하기"):
     predicted_price = round(float(예측값[0][0]))
 
     st.success(f"예측된 가격: {predicted_price:,} 원")
+
+st.markdown("---")
+
+st.markdown(
+    """
+<div style='text-align: center; color: gray; font-size: 14px;'>
+
+<b>유니폼 가격 예측 모델</b><br><br>
+
+Developed by 황승현<br>
+Python · Streamlit · TensorFlow 기반 개인 프로젝트<br><br>
+
+레사모 거래 데이터를 기반으로 유니폼 예상 시세를 예측합니다.<br>
+피드백은 모델 개선에 큰 도움이 됩니다.<br><br>
+
+<a href="https://github.com/seunghyeon-hwang/uniform-price-prediction-app" target="_blank">
+GitHub Repository
+</a>
+
+</div>
+""",
+    unsafe_allow_html=True,
+)
