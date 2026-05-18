@@ -12,9 +12,7 @@ import time
 currenttime = int(time.time())
 
 st.title("유니폼 가격 예측 모델")
-st.write(
-    "레사모 거래 데이터를 기반으로 유니폼의 예상 거래 가격을 예측하는 웹앱입니다."
-)
+st.write("레사모 거래 데이터를 기반으로 유니폼의 예상 거래 가격을 예측하는 웹앱입니다.")
 
 with st.expander("사용방법", expanded=True):
     st.markdown("""
@@ -147,8 +145,11 @@ if st.button("거래 데이터 불러오기 및 모델 학습"):
     except ValueError:
         st.error("유니폼 코드는 숫자로 입력해야 합니다.")
         st.stop()
-
-    url = f"https://4mation.net/api/product/detail/{유니폼코드}"
+    # https://4mation.net/api/price/getpricedata/completed/{유니폼코드}?is_all=true
+    # url = f"https://4mation.net/api/product/detail/{유니폼코드}"
+    url = (
+        f"https://4mation.net/api/price/getpricedata/completed/{유니폼코드}?is_all=true"
+    )
 
     try:
         data = requests.get(url, timeout=10)
@@ -162,11 +163,11 @@ if st.button("거래 데이터 불러오기 및 모델 학습"):
 
     딕셔너리 = data.json()
 
-    if "result" not in 딕셔너리 or "price_list" not in 딕셔너리["result"]:
-        st.error("거래 데이터 price_list를 찾을 수 없습니다.")
+    if "data" not in 딕셔너리:
+        st.error("거래 데이터를 찾을 수 없습니다.")
         st.stop()
 
-    price_list = 딕셔너리["result"]["price_list"]
+    price_list = 딕셔너리["data"]
 
     filename = 거래데이터수집(유니폼코드, price_list, size_map, true_false_map)
 
@@ -180,7 +181,7 @@ if st.button("거래 데이터 불러오기 및 모델 학습"):
         st.dataframe(df)
         st.stop()
 
-    st.subheader("수집된 거래 데이터")
+    st.subheader(f"수집된 거래 데이터 개수 : {len(price_list)}")
     st.dataframe(df)
 
     x_train = df.drop("가격", axis=1)
