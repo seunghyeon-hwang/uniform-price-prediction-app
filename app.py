@@ -3,6 +3,8 @@ from datetime import datetime, timezone
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_absolute_error, r2_score
+from sklearn.model_selection import train_test_split
 import tensorflow as tf
 import requests
 import json
@@ -109,7 +111,7 @@ def 거래데이터수집(유니폼코드, price_list, size_map, true_false_map)
 
     with open(filename, "w", encoding="utf-8-sig") as file:
         file.write(
-            "유니폼코드,사이즈,등급,마킹번호,마킹오피셜,패치유무,패치오피셜,등록일,가격\n"
+            "유니폼코드,사이즈,등급,마킹번호,마킹오피셜,패치유무,패치오피셜,거래경과일,가격\n"
         )
 
         for i in price_list:
@@ -120,6 +122,7 @@ def 거래데이터수집(유니폼코드, price_list, size_map, true_false_map)
                 sellingtime = i.get("datetime", "")
 
                 timestamp = iso8601_z_to_timestamp(sellingtime)
+                days_ago = (currenttime - timestamp) / 86400
 
                 marking = i.get("marking", {}) or {}
                 patch = i.get("patch", {}) or {}
@@ -135,7 +138,7 @@ def 거래데이터수집(유니폼코드, price_list, size_map, true_false_map)
                     size_value = size_map.get(size, -1)
 
                 file.write(
-                    f"{int(유니폼코드)},{size_value},{grade},{marking_number},{true_false_map.get(marking_official, 0)},{true_false_map.get(is_patch, 0)},{true_false_map.get(patch_official, 0)},{timestamp},{price}\n"
+                    f"{int(유니폼코드)},{size_value},{grade},{marking_number},{true_false_map.get(marking_official, 0)},{true_false_map.get(is_patch, 0)},{true_false_map.get(patch_official, 0)},{days_ago},{price}\n"
                 )
 
     return filename
@@ -178,6 +181,7 @@ if st.button("거래 데이터 불러오기 및 모델 학습"):
     filename = 거래데이터수집(유니폼코드, price_list, size_map, true_false_map)
 
     df = pd.read_csv(filename, encoding="utf-8-sig")
+    df = df[df["가격"] < df["가격"].quantile(0.95)]
 
     if os.path.exists(filename):
         os.remove(filename)
@@ -190,33 +194,53 @@ if st.button("거래 데이터 불러오기 및 모델 학습"):
     st.subheader(f"수집된 거래 데이터 개수 : {len(price_list)}")
     st.dataframe(df)
 
-    x_train = df.drop("가격", axis=1)
-    y_train = df["가격"]
+    X = df.drop(["가격", "유니폼코드"], axis=1)
+    y = df["가격"]
+    X_train, X_valid, y_train, y_valid = train_test_split(
+        X, y, test_size=0.2, random_state=42
+    )
 
     scaler = MinMaxScaler()
-    x_train_scaled = scaler.fit_transform(x_train)
-
+    x_train_scaled = scaler.fit_transform(X_train)
+    X_valid_scaled = scaler.transform(X_valid)
     model = tf.keras.Sequential(
         [
-            tf.keras.layers.Dense(64, activation="relu", input_shape=(8,)),
-            tf.keras.layers.BatchNormalization(),
-            tf.keras.layers.Dense(128, activation="relu"),
-            tf.keras.layers.Dropout(0.3),
-            tf.keras.layers.Dense(64, activation="relu"),
+            tf.keras.layers.Input(shape=(7,)),
+            tf.keras.layers.Dense(16, activation="relu"),
+            tf.keras.layers.Dropout(0.1),
+            tf.keras.layers.Dense(8, activation="relu"),
             tf.keras.layers.Dense(1),
         ]
     )
 
-    model.compile(optimizer="adam", loss="mae")
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
+        loss="mae",
+        metrics=["mae"],
+    )
 
     with st.spinner("모델 학습 중입니다."):
-        model.fit(x_train_scaled, y_train, epochs=200, verbose=0)
+        early_stop = tf.keras.callbacks.EarlyStopping(
+            monitor="val_loss", patience=30, restore_best_weights=True
+        )
+
+        history = model.fit(
+            x_train_scaled,
+            y_train,
+            validation_data=(X_valid_scaled, y_valid),
+            epochs=300,
+            batch_size=16,
+            callbacks=[early_stop],
+            verbose=0,
+        )
 
     st.session_state["model"] = model
     st.session_state["scaler"] = scaler
     st.session_state["uniform_code_value"] = uniform_code_value
-
-    st.success("모델 학습이 완료되었습니다.")
+    mae = mean_absolute_error(y_valid, model.predict(X_valid_scaled))
+    st.success(f"""
+    모델 학습이 완료되었습니다.
+    """)
 
 
 st.subheader("가격 예측")
@@ -261,14 +285,13 @@ if st.button("가격 예측하기"):
     uniform_code_value = st.session_state["uniform_code_value"]
 
     user_input = [
-        uniform_code_value,
         size_map.get(size),
         grade,
         marking_number,
         marking_official,
         patch,
         patch_official,
-        currenttime,
+        0,
     ]
 
     user_input_scaled = scaler.transform([user_input])
@@ -276,7 +299,7 @@ if st.button("가격 예측하기"):
 
     predicted_price = round(float(예측값[0][0]))
 
-    st.success(f"예측된 가격: {predicted_price:,} 원")
+    st.success(f"예측된 가격: {round(predicted_price,-3):,} 원")
 
 st.markdown("---")
 
