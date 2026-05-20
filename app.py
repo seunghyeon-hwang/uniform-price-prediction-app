@@ -205,10 +205,11 @@ if st.button("거래 데이터 불러오기 및 모델 학습"):
     X_valid_scaled = scaler.transform(X_valid)
     model = tf.keras.Sequential(
         [
-            tf.keras.layers.Input(shape=(7,)),
-            tf.keras.layers.Dense(16, activation="relu"),
-            tf.keras.layers.Dropout(0.1),
-            tf.keras.layers.Dense(8, activation="relu"),
+            tf.keras.layers.Dense(64, activation="relu", input_shape=(7,)),
+            tf.keras.layers.BatchNormalization(),
+            tf.keras.layers.Dense(128, activation="relu"),
+            tf.keras.layers.Dropout(0.3),
+            tf.keras.layers.Dense(64, activation="relu"),
             tf.keras.layers.Dense(1),
         ]
     )
