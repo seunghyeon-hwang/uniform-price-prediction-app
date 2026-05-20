@@ -215,7 +215,7 @@ if st.button("거래 데이터 불러오기 및 모델 학습"):
     )
 
     model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
+        optimizer="adam",
         loss="mae",
         metrics=["mae"],
     )
