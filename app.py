@@ -5,6 +5,10 @@ import pandas as pd
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.linear_model import Ridge
+from sklearn.neighbors import KNeighborsRegressor
 import tensorflow as tf
 import requests
 import json
@@ -203,7 +207,31 @@ if st.button("거래 데이터 불러오기 및 모델 학습"):
     scaler = MinMaxScaler()
     x_train_scaled = scaler.fit_transform(X_train)
     X_valid_scaled = scaler.transform(X_valid)
-    model = tf.keras.Sequential(
+    
+    rf_model = RandomForestRegressor(
+        n_estimators=200,
+        max_depth=8,
+        min_samples_split=5,
+        min_samples_leaf=2,
+        random_state=42,
+        n_jobs=-1,
+    )
+    
+    gb_model = GradientBoostingRegressor(
+        n_estimators=100,
+        learning_rate=0.05,
+        max_depth=4,
+        min_samples_split=5,
+        min_samples_leaf=2,
+        random_state=42,
+    )
+    
+    ridge_model = Ridge(alpha=1.0, random_state=42)
+    knn_model = KNeighborsRegressor(
+        n_neighbors=5, weights="distance", metric="minkowski", p=2
+    )
+
+    dl_model = tf.keras.Sequential(
         [
             tf.keras.layers.Dense(64, activation="relu", input_shape=(7,)),
             tf.keras.layers.BatchNormalization(),
@@ -213,8 +241,25 @@ if st.button("거래 데이터 불러오기 및 모델 학습"):
             tf.keras.layers.Dense(1),
         ]
     )
+    
+    models = {
+        "Random Forest": rf_model,
+        "Gradient Boosting": gb_model,
+        "Ridge": ridge_model,
+        "KNN": knn_model,
+    }
 
-    model.compile(
+    model_mae = {}
+    trained_models = {}
+
+    for name, model in models.items():
+        model.fit(x_train_scaled, y_train)
+        y_pred = model.predict(X_valid_scaled)
+        mae = mean_absolute_error(y_valid, y_pred)
+        model_mae[name] = mae
+        trained_models[name] = model
+
+    dl_model.compile(
         optimizer="adam",
         loss="mae",
         metrics=["mae"],
@@ -225,7 +270,7 @@ if st.button("거래 데이터 불러오기 및 모델 학습"):
             monitor="val_loss", patience=30, restore_best_weights=True
         )
 
-        history = model.fit(
+        history = dl_model.fit(
             x_train_scaled,
             y_train,
             validation_data=(X_valid_scaled, y_valid),
@@ -235,10 +280,19 @@ if st.button("거래 데이터 불러오기 및 모델 학습"):
             verbose=0,
         )
 
-    st.session_state["model"] = model
+    dl_pred = dl_model.predict(X_valid_scaled).flatten()
+    dl_mae = mean_absolute_error(y_valid, dl_pred)
+    model_mae["Deep Learning"] = dl_mae
+    trained_models["Deep Learning"] = dl_model
+
+    best_model_name = min(model_mae, key=model_mae.get)
+    best_model = trained_models[best_model_name]
+    best_mae = model_mae[best_model_name]
+
+    st.session_state["model"] = best_model
+    st.session_state["model_name"] = best_model_name
+    st.session_state["best_mae"] = best_mae
     st.session_state["scaler"] = scaler
-    st.session_state["uniform_code_value"] = uniform_code_value
-    mae = mean_absolute_error(y_valid, model.predict(X_valid_scaled))
     st.success(f"""
     모델 학습이 완료되었습니다.
     """)
@@ -281,9 +335,9 @@ if st.button("가격 예측하기"):
         st.warning("먼저 거래 데이터를 불러오고 모델을 학습하세요.")
         st.stop()
 
-    model = st.session_state["model"]
+    best_model = st.session_state["model"]
+    best_model_name = st.session_state["model_name"]
     scaler = st.session_state["scaler"]
-    uniform_code_value = st.session_state["uniform_code_value"]
 
     user_input = [
         size_map.get(size),
@@ -296,11 +350,14 @@ if st.button("가격 예측하기"):
     ]
 
     user_input_scaled = scaler.transform([user_input])
-    예측값 = model.predict(user_input_scaled)
+    예측값 = best_model.predict(user_input_scaled)
 
-    predicted_price = round(float(예측값[0][0]))
+    predicted_price = int(round(float(np.array(예측값).flatten()[0]), -3))
+    mae = st.session_state["best_mae"]
 
-    st.success(f"예측된 가격: {round(predicted_price,-3):,} 원")
+    st.success(
+        f"예측된 가격: {int(round(predicted_price - mae * 0.5,-3)):,} ~ {int(round(predicted_price + mae * 0.5,-3)):,} 원"
+    )
 
 st.markdown("---")
 
