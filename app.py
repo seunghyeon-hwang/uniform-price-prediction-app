@@ -23,7 +23,14 @@ st.set_page_config(
 )
 currenttime = int(time.time())
 
-st.title("유니폼 가격 예측 모델")
+st.markdown(
+    """
+    <h1 style='font-size:2.5rem;'>
+    유니폼 가격 예측 모델
+    </h1>
+    """,
+    unsafe_allow_html=True,
+)
 st.write("레사모 거래 데이터를 기반으로 유니폼의 예상 거래 가격을 예측하는 웹앱입니다.")
 
 with st.expander("사용방법", expanded=True):
@@ -207,7 +214,7 @@ if st.button("거래 데이터 불러오기 및 모델 학습"):
     scaler = MinMaxScaler()
     x_train_scaled = scaler.fit_transform(X_train)
     X_valid_scaled = scaler.transform(X_valid)
-    
+
     rf_model = RandomForestRegressor(
         n_estimators=200,
         max_depth=8,
@@ -216,7 +223,7 @@ if st.button("거래 데이터 불러오기 및 모델 학습"):
         random_state=42,
         n_jobs=-1,
     )
-    
+
     gb_model = GradientBoostingRegressor(
         n_estimators=100,
         learning_rate=0.05,
@@ -225,7 +232,7 @@ if st.button("거래 데이터 불러오기 및 모델 학습"):
         min_samples_leaf=2,
         random_state=42,
     )
-    
+
     ridge_model = Ridge(alpha=1.0, random_state=42)
     knn_model = KNeighborsRegressor(
         n_neighbors=5, weights="distance", metric="minkowski", p=2
@@ -241,7 +248,7 @@ if st.button("거래 데이터 불러오기 및 모델 학습"):
             tf.keras.layers.Dense(1),
         ]
     )
-    
+
     models = {
         "Random Forest": rf_model,
         "Gradient Boosting": gb_model,
