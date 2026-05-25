@@ -1,32 +1,36 @@
+# 유니폼 가격 예측 모델
+
 레사모 거래 데이터를 기반으로 축구 유니폼의 예상 거래 가격을 예측하는 웹앱입니다.
-사용자가 입력한 유니폼 코드의 거래 데이터를 자동으로 수집하고, 사이즈·등급·마킹·패치 여부 등의 정보를 바탕으로 현재 시세를 예측합니다.
+유니폼 코드와 사이즈, 등급, 마킹·패치 여부 등의 정보를 입력하면 머신러닝 모델이 예상 거래 가격과 거래 범위를 제공합니다.
 
-주요 기능
-4mation API 기반 거래 데이터 자동 수집
-거래 데이터 전처리 및 이상치 제거
-거래 경과일(days_ago) feature engineering 적용
-여러 머신러닝 모델 성능 비교 후 최적 모델 자동 선택
-예측 가격 + 예상 거래 범위 출력
-Streamlit 기반 웹 배포
-사용 모델
-RandomForestRegressor
-GradientBoostingRegressor
-Ridge
-KNeighborsRegressor
-TensorFlow Deep Learning Model
+## 주요 기능
 
-각 모델의 MAE를 비교하여 가장 성능이 좋은 모델을 자동으로 선택합니다.
+* 4mation 거래 API 기반 실시간 거래 데이터 수집
+* 거래 데이터 자동 전처리 및 이상치 제거
+* 거래 경과일(days_ago) feature engineering 적용
+* 5개 모델 성능 비교 후 자동 최적 모델 선택
 
-사용 방법
-https://4mation.net/kit-archive 접속
-원하는 유니폼 클릭
-URL 마지막 숫자 코드 복사
-웹앱에 입력 후 모델 학습
-사이즈·등급·마킹·패치 정보 입력 후 가격 예측
-Tech Stack
+  * RandomForestRegressor
+  * GradientBoostingRegressor
+  * Ridge
+  * KNeighborsRegressor
+  * TensorFlow Deep Learning
+* MAE 기반 예상 거래 범위 출력
+* Streamlit 기반 웹 배포
 
-Python · Pandas · Scikit-learn · TensorFlow · Streamlit
+## Tech Stack
 
-Web App
+* Python
+* Streamlit
+* scikit-learn
+* TensorFlow / Keras
+* Pandas / NumPy
 
-https://re4mo-price-prediction.streamlit.app/
+## 프로젝트 목적
+
+실제 유니폼 거래 데이터를 활용해
+“현재 판매 중인 매물이 적정 가격인지”를 직관적으로 판단할 수 있는 서비스를 만드는 것을 목표로 했습니다.
+
+## GitHub
+
+https://github.com/seunghyeon-hwang/uniform-price-prediction-app
