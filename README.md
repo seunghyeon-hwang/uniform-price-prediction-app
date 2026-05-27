@@ -3,9 +3,8 @@
 레사모 거래 데이터를 기반으로 축구 유니폼의 예상 거래 가격을 예측하는 웹앱입니다.
 유니폼 코드와 사이즈, 등급, 마킹·패치 여부 등의 정보를 입력하면 머신러닝 모델이 예상 거래 가격과 거래 범위를 제공합니다.
 
-## 배포 사이트
+## [배포 사이트](https://re4mo-price-prediction.streamlit.app/)
 
-https://re4mo-price-prediction.streamlit.app/
 
 ## 주요 기능
 
