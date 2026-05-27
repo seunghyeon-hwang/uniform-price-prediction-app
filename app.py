@@ -361,10 +361,13 @@ if st.button("가격 예측하기"):
 
     predicted_price = int(round(float(np.array(예측값).flatten()[0]), -3))
     mae = st.session_state["best_mae"]
+    low_price = int(round(predicted_price - mae * 0.5, -3))
+    high_price = int(round(predicted_price + mae * 0.5, -3))
 
-    st.success(
-        f"예측된 가격: {int(round(predicted_price - mae * 0.5,-3)):,} ~ {int(round(predicted_price + mae * 0.5,-3)):,} 원"
-    )
+    st.success(f"예측 가격: {predicted_price:,} 원")
+
+    st.caption(f"예상 거래 범위: {low_price:,} ~ {high_price:,} 원")
+    st.caption(f"사용 모델: {best_model_name}")
 
 st.markdown("---")
 
