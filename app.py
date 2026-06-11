@@ -208,7 +208,7 @@ if st.button("거래 데이터 불러오기 및 모델 학습"):
     X = df.drop(["가격", "유니폼코드"], axis=1)
     y = df["가격"]
     X['마킹번호'] = X['마킹번호'].astype(int).astype(str)
-    X = pd.get_dummies(X, columns=['마킹번호'])
+    X = pd.get_dummies(X, columns=['마킹번호'], prefix='등번호')
     feature_columns = X.columns
     
     X_train, X_valid, y_train, y_valid = train_test_split(
