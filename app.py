@@ -207,6 +207,10 @@ if st.button("거래 데이터 불러오기 및 모델 학습"):
 
     X = df.drop(["가격", "유니폼코드"], axis=1)
     y = df["가격"]
+    X['마킹번호'] = X['마킹번호'].astype(int).astype(str)
+    X = pd.get_dummies(X, columns=['마킹번호'])
+    feature_columns = X.columns
+    
     X_train, X_valid, y_train, y_valid = train_test_split(
         X, y, test_size=0.2, random_state=42
     )
@@ -240,7 +244,7 @@ if st.button("거래 데이터 불러오기 및 모델 학습"):
 
     dl_model = tf.keras.Sequential(
         [
-            tf.keras.layers.Dense(64, activation="relu", input_shape=(7,)),
+            tf.keras.layers.Dense(64, activation="relu", input_shape=(x_train_scaled.shape[1],)),
             tf.keras.layers.BatchNormalization(),
             tf.keras.layers.Dense(128, activation="relu"),
             tf.keras.layers.Dropout(0.3),
@@ -300,6 +304,7 @@ if st.button("거래 데이터 불러오기 및 모델 학습"):
     st.session_state["model_name"] = best_model_name
     st.session_state["best_mae"] = best_mae
     st.session_state["scaler"] = scaler
+    st.session_state["feature_columns"] = feature_columns
     st.success(f"""
     모델 학습이 완료되었습니다.
     """)
@@ -345,18 +350,34 @@ if st.button("가격 예측하기"):
     best_model = st.session_state["model"]
     best_model_name = st.session_state["model_name"]
     scaler = st.session_state["scaler"]
+    
+    user_input_df = pd.DataFrame([{
+    "사이즈": size_map.get(size),
+    "등급": grade,
+    "마킹번호": str(int(marking_number)),
+    "마킹오피셜": marking_official,
+    "패치유무": patch,
+    "패치오피셜": patch_official,
+    "거래경과일": 0,
+    }])
 
-    user_input = [
-        size_map.get(size),
-        grade,
-        marking_number,
-        marking_official,
-        patch,
-        patch_official,
-        0,
-    ]
+    # 학습 때와 동일하게 One-Hot Encoding
+    user_input_df = pd.get_dummies(
+        user_input_df,
+        columns=["마킹번호"],
+        prefix="등번호"
+    )
 
-    user_input_scaled = scaler.transform([user_input])
+    # 학습 데이터의 column 구조와 맞추기
+    feature_columns = st.session_state["feature_columns"]
+
+    user_input_df = user_input_df.reindex(
+        columns=feature_columns,
+        fill_value=0
+    )
+
+    user_input_scaled = scaler.transform(user_input_df)
+
     예측값 = best_model.predict(user_input_scaled)
 
     predicted_price = int(round(float(np.array(예측값).flatten()[0]), -3))
