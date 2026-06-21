@@ -192,7 +192,6 @@ if st.button("거래 데이터 불러오기 및 모델 학습"):
     filename = 거래데이터수집(유니폼코드, price_list, size_map, true_false_map)
 
     df = pd.read_csv(filename, encoding="utf-8-sig")
-    df = df[df["가격"] < df["가격"].quantile(0.95)]
 
     if os.path.exists(filename):
         os.remove(filename)
@@ -202,7 +201,7 @@ if st.button("거래 데이터 불러오기 및 모델 학습"):
         st.dataframe(df)
         st.stop()
 
-    st.subheader(f"수집된 거래 데이터 개수 : {len(price_list)}")
+    st.subheader(f"수집된 거래 데이터 개수 : {len(price_list) - 1}")
     st.dataframe(df)
 
     X = df.drop(["가격", "유니폼코드"], axis=1)
