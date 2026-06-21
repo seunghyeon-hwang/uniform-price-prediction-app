@@ -201,7 +201,7 @@ if st.button("거래 데이터 불러오기 및 모델 학습"):
         st.dataframe(df)
         st.stop()
 
-    st.subheader(f"수집된 거래 데이터 개수 : {len(price_list) - 1}")
+    st.subheader(f"수집된 거래 데이터 개수 : {len(price_list)}")
     st.dataframe(df)
 
     X = df.drop(["가격", "유니폼코드"], axis=1)
