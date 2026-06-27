@@ -250,6 +250,9 @@ if st.button("거래 데이터 불러오기 및 모델 학습"):
             tf.keras.layers.Dense(128, activation="relu"),
             tf.keras.layers.Dropout(0.3),
             tf.keras.layers.Dense(64, activation="relu"),
+            tf.keras.layers.Dense(32, activation="relu"),
+            tf.keras.layers.Dense(16, activation="relu"),
+            tf.keras.layers.Dense(8, activation="relu"),
             tf.keras.layers.Dense(1),
         ]
     )
