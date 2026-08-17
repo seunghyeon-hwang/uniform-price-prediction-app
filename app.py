@@ -20,12 +20,10 @@ st.set_page_config(
 )
 
 MIN_TRAINING_SAMPLES = 10
-PREDICTION_INTERVAL_PERCENTILE = 90
 MODEL_STATE_KEYS = (
     "model",
     "model_name",
     "best_mae",
-    "prediction_interval_error",
     "scaler",
     "feature_columns",
     "trained_uniform_code",
@@ -300,7 +298,7 @@ def cross_validate_models(X, y):
         name: mean_absolute_error(y, predictions)
         for name, predictions in oof_predictions.items()
     }
-    return model_mae, oof_predictions, dl_epoch_counts
+    return model_mae, dl_epoch_counts
 
 
 def train_model_on_full_dataset(model_name, X, y, dl_epoch_counts):
@@ -396,13 +394,9 @@ if st.button("거래 데이터 불러오기 및 모델 학습"):
     feature_columns = list(X.columns)
 
     with st.spinner("교차 검증으로 모델을 비교하고 전체 데이터로 학습 중입니다."):
-        model_mae, oof_predictions, dl_epoch_counts = cross_validate_models(X, y)
+        model_mae, dl_epoch_counts = cross_validate_models(X, y)
         best_model_name = min(model_mae, key=model_mae.get)
         best_mae = model_mae[best_model_name]
-        residuals = np.abs(y.to_numpy() - oof_predictions[best_model_name])
-        prediction_interval_error = float(
-            np.percentile(residuals, PREDICTION_INTERVAL_PERCENTILE)
-        )
         best_model, scaler = train_model_on_full_dataset(
             best_model_name, X, y, dl_epoch_counts
         )
@@ -410,22 +404,11 @@ if st.button("거래 데이터 불러오기 및 모델 학습"):
     st.session_state["model"] = best_model
     st.session_state["model_name"] = best_model_name
     st.session_state["best_mae"] = best_mae
-    st.session_state["prediction_interval_error"] = prediction_interval_error
     st.session_state["scaler"] = scaler
     st.session_state["feature_columns"] = feature_columns
     st.session_state["trained_uniform_code"] = uniform_code_value
 
-    result_df = pd.DataFrame(
-        {
-            "모델": model_mae.keys(),
-            "교차 검증 MAE": model_mae.values(),
-        }
-    ).sort_values("교차 검증 MAE")
-    st.dataframe(result_df, hide_index=True)
-    st.success(
-        f"모델 학습이 완료되었습니다. 선택 모델: {best_model_name} "
-        f"(교차 검증 MAE {best_mae:,.0f}원)"
-    )
+    st.success("모델 학습이 완료되었습니다.")
 
 
 st.subheader("가격 예측")
@@ -513,17 +496,14 @@ if st.button("가격 예측하기"):
     predicted_price = max(
         0, int(round(float(np.array(prediction).flatten()[0]), -3))
     )
-    interval_error = st.session_state["prediction_interval_error"]
-    low_price = max(0, int(round(predicted_price - interval_error, -3)))
-    high_price = int(round(predicted_price + interval_error, -3))
+    mae = st.session_state["best_mae"]
+    low_price = max(0, int(round(predicted_price - 0.5 * mae, -3)))
+    high_price = int(round(predicted_price + 0.5 * mae, -3))
 
     st.success(f"예측 가격: {predicted_price:,} 원")
 
     st.caption(f"예상 거래 범위: {low_price:,} ~ {high_price:,} 원")
-    st.caption(
-        f"사용 모델: {best_model_name} · 교차 검증 잔차의 "
-        f"{PREDICTION_INTERVAL_PERCENTILE}% 기준"
-    )
+    st.caption(f"사용 모델: {best_model_name}")
 st.markdown("---")
 
 st.markdown(
