@@ -3,17 +3,14 @@ from datetime import datetime, timezone
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics import mean_absolute_error, r2_score
-from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error
+from sklearn.model_selection import KFold
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.linear_model import Ridge
 from sklearn.neighbors import KNeighborsRegressor
 import tensorflow as tf
 import requests
-import json
-import os
-import time
 
 st.set_page_config(
     page_title="유니폼 가격 예측기",
@@ -21,7 +18,18 @@ st.set_page_config(
     layout="centered",
     initial_sidebar_state="auto",
 )
-currenttime = int(time.time())
+
+MIN_TRAINING_SAMPLES = 10
+PREDICTION_INTERVAL_PERCENTILE = 90
+MODEL_STATE_KEYS = (
+    "model",
+    "model_name",
+    "best_mae",
+    "prediction_interval_error",
+    "scaler",
+    "feature_columns",
+    "trained_uniform_code",
+)
 
 st.markdown(
     """
@@ -49,7 +57,7 @@ with st.expander("사용방법", expanded=True):
 
         `12345`
         """)
-유니폼코드 = st.text_input("유니폼 코드 : ")
+uniform_code = st.text_input("유니폼 코드 : ")
 
 size_map = {
     "S": 0,
@@ -96,16 +104,20 @@ true_false_map = {True: 1, False: 0, None: 0, 0: 0, 1: 1}
 
 
 def iso8601_z_to_timestamp(s: str) -> int:
-    if not s:
-        return 0
+    if not isinstance(s, str) or not s.strip():
+        raise ValueError("거래 시간이 없습니다.")
 
-    original = s
+    original = s.strip()
+    s = original
 
     if s.endswith("Z"):
         s = s[:-1] + "+00:00"
 
     try:
-        return int(datetime.fromisoformat(s).timestamp())
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp())
     except ValueError:
         for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ"):
             try:
@@ -117,58 +129,221 @@ def iso8601_z_to_timestamp(s: str) -> int:
     raise ValueError(f"지원하지 않는 시간 포맷: {original}")
 
 
-def 거래데이터수집(유니폼코드, price_list, size_map, true_false_map):
-    filename = f"{유니폼코드}.csv"
+def parse_numeric_value(value):
+    if isinstance(value, str):
+        value = value.replace(",", "").strip()
+    return float(value)
 
-    with open(filename, "w", encoding="utf-8-sig") as file:
-        file.write(
-            "유니폼코드,사이즈,등급,마킹번호,마킹오피셜,패치유무,패치오피셜,거래경과일,가격\n"
+
+def build_transactions_dataframe(uniform_code, price_list, size_map, true_false_map):
+    rows = []
+    skipped_count = 0
+    current_timestamp = int(datetime.now(timezone.utc).timestamp())
+
+    for item in price_list:
+        if not isinstance(item, dict):
+            skipped_count += 1
+            continue
+
+        try:
+            size = item["size"]
+            price = parse_numeric_value(item["price"])
+            grade = parse_numeric_value(item["grade"])
+            timestamp = iso8601_z_to_timestamp(item.get("datetime"))
+
+            if isinstance(size, list):
+                size = size[0] if size else ""
+            if isinstance(size, str):
+                size = size.strip()
+            size_value = size_map.get(size, -1)
+
+            if (
+                size_value == -1
+                or not np.isfinite(price)
+                or not np.isfinite(grade)
+                or price <= 0
+                or not 1 <= grade <= 6
+                or timestamp > current_timestamp
+            ):
+                raise ValueError("학습에 사용할 수 없는 거래 데이터입니다.")
+
+            marking = item.get("marking", {}) or {}
+            patch = item.get("patch", {}) or {}
+            if not isinstance(marking, dict) or not isinstance(patch, dict):
+                raise ValueError("마킹 또는 패치 형식이 올바르지 않습니다.")
+
+            marking_number = int(
+                parse_numeric_value(marking.get("marking_number", 0) or 0)
+            )
+            days_ago = (current_timestamp - timestamp) / 86400
+
+            rows.append(
+                {
+                    "유니폼코드": int(uniform_code),
+                    "사이즈": size_value,
+                    "등급": grade,
+                    "마킹번호": marking_number,
+                    "마킹오피셜": true_false_map.get(marking.get("official", 0), 0),
+                    "패치유무": true_false_map.get(patch.get("is_patch", 0), 0),
+                    "패치오피셜": true_false_map.get(patch.get("official", 0), 0),
+                    "거래경과일": days_ago,
+                    "가격": price,
+                }
+            )
+        except (KeyError, TypeError, ValueError, OverflowError):
+            skipped_count += 1
+
+    columns = [
+        "유니폼코드",
+        "사이즈",
+        "등급",
+        "마킹번호",
+        "마킹오피셜",
+        "패치유무",
+        "패치오피셜",
+        "거래경과일",
+        "가격",
+    ]
+    return pd.DataFrame(rows, columns=columns), skipped_count
+
+
+def sklearn_models(training_size):
+    return {
+        "Random Forest": RandomForestRegressor(
+            n_estimators=200,
+            max_depth=8,
+            min_samples_split=5,
+            min_samples_leaf=2,
+            random_state=42,
+            n_jobs=-1,
+        ),
+        "Gradient Boosting": GradientBoostingRegressor(
+            n_estimators=100,
+            learning_rate=0.05,
+            max_depth=4,
+            min_samples_split=5,
+            min_samples_leaf=2,
+            random_state=42,
+        ),
+        "Ridge": Ridge(alpha=1.0),
+        "KNN": KNeighborsRegressor(
+            n_neighbors=min(5, training_size),
+            weights="distance",
+            metric="minkowski",
+            p=2,
+        ),
+    }
+
+
+def build_deep_learning_model(input_size):
+    return tf.keras.Sequential(
+        [
+            tf.keras.Input(shape=(input_size,)),
+            tf.keras.layers.Dense(64, activation="relu"),
+            tf.keras.layers.BatchNormalization(),
+            tf.keras.layers.Dense(128, activation="relu"),
+            tf.keras.layers.Dropout(0.3),
+            tf.keras.layers.Dense(64, activation="relu"),
+            tf.keras.layers.Dense(32, activation="relu"),
+            tf.keras.layers.Dense(16, activation="relu"),
+            tf.keras.layers.Dense(8, activation="relu"),
+            tf.keras.layers.Dense(1),
+        ]
+    )
+
+
+def cross_validate_models(X, y):
+    split_count = min(5, max(3, len(X) // 5))
+    kfold = KFold(n_splits=split_count, shuffle=True, random_state=42)
+    model_names = [*sklearn_models(len(X)), "Deep Learning"]
+    oof_predictions = {
+        name: np.empty(len(X), dtype=float) for name in model_names
+    }
+    dl_epoch_counts = []
+
+    for fold_number, (train_index, valid_index) in enumerate(kfold.split(X), start=1):
+        X_train = X.iloc[train_index]
+        X_valid = X.iloc[valid_index]
+        y_train = y.iloc[train_index]
+        y_valid = y.iloc[valid_index]
+
+        fold_scaler = MinMaxScaler()
+        X_train_scaled = fold_scaler.fit_transform(X_train)
+        X_valid_scaled = fold_scaler.transform(X_valid)
+
+        for name, model in sklearn_models(len(X_train)).items():
+            model.fit(X_train_scaled, y_train)
+            oof_predictions[name][valid_index] = model.predict(X_valid_scaled)
+
+        tf.keras.backend.clear_session()
+        tf.keras.utils.set_random_seed(42 + fold_number)
+        dl_model = build_deep_learning_model(X_train_scaled.shape[1])
+        dl_model.compile(optimizer="adam", loss="mae", metrics=["mae"])
+        early_stop = tf.keras.callbacks.EarlyStopping(
+            monitor="val_loss", patience=15, restore_best_weights=True
         )
+        history = dl_model.fit(
+            X_train_scaled,
+            y_train,
+            validation_data=(X_valid_scaled, y_valid),
+            epochs=200,
+            batch_size=min(16, len(X_train)),
+            callbacks=[early_stop],
+            verbose=0,
+        )
+        oof_predictions["Deep Learning"][valid_index] = dl_model.predict(
+            X_valid_scaled, verbose=0
+        ).flatten()
+        dl_epoch_counts.append(len(history.history["loss"]))
 
-        for i in price_list:
-            if "size" in i and "price" in i and "grade" in i:
-                size = i.get("size", "")
-                price = i.get("price", "")
-                grade = i.get("grade", "")
-                sellingtime = i.get("datetime", "")
+    model_mae = {
+        name: mean_absolute_error(y, predictions)
+        for name, predictions in oof_predictions.items()
+    }
+    return model_mae, oof_predictions, dl_epoch_counts
 
-                timestamp = iso8601_z_to_timestamp(sellingtime)
-                days_ago = (currenttime - timestamp) / 86400
 
-                marking = i.get("marking", {}) or {}
-                patch = i.get("patch", {}) or {}
+def train_model_on_full_dataset(model_name, X, y, dl_epoch_counts):
+    scaler = MinMaxScaler()
+    X_scaled = scaler.fit_transform(X)
 
-                marking_number = marking.get("marking_number", 0) or 0
-                marking_official = marking.get("official", 0)
-                is_patch = patch.get("is_patch", 0)
-                patch_official = patch.get("official", 0)
+    if model_name == "Deep Learning":
+        tf.keras.backend.clear_session()
+        tf.keras.utils.set_random_seed(42)
+        model = build_deep_learning_model(X_scaled.shape[1])
+        model.compile(optimizer="adam", loss="mae", metrics=["mae"])
+        final_epochs = max(20, int(np.median(dl_epoch_counts)))
+        model.fit(
+            X_scaled,
+            y,
+            epochs=final_epochs,
+            batch_size=min(16, len(X)),
+            verbose=0,
+        )
+    else:
+        model = sklearn_models(len(X))[model_name]
+        model.fit(X_scaled, y)
 
-                if isinstance(size, list) and len(size) > 0:
-                    size_value = size_map.get(size[0], -1)
-                else:
-                    size_value = size_map.get(size, -1)
-
-                file.write(
-                    f"{int(유니폼코드)},{size_value},{grade},{marking_number},{true_false_map.get(marking_official, 0)},{true_false_map.get(is_patch, 0)},{true_false_map.get(patch_official, 0)},{days_ago},{price}\n"
-                )
-
-    return filename
+    return model, scaler
 
 
 if st.button("거래 데이터 불러오기 및 모델 학습"):
-    if not 유니폼코드:
+    if not uniform_code:
         st.warning("유니폼 코드를 입력하세요.")
         st.stop()
 
     try:
-        uniform_code_value = int(유니폼코드)
+        uniform_code_value = int(uniform_code)
     except ValueError:
         st.error("유니폼 코드는 숫자로 입력해야 합니다.")
         st.stop()
-    # https://4mation.net/api/price/getpricedata/completed/{유니폼코드}?is_all=true
-    # url = f"https://4mation.net/api/product/detail/{유니폼코드}"
+
+    for key in MODEL_STATE_KEYS:
+        st.session_state.pop(key, None)
+
     url = (
-        f"https://4mation.net/api/price/getpricedata/completed/{유니폼코드}?is_all=true"
+        "https://4mation.net/api/price/getpricedata/completed/"
+        f"{uniform_code_value}?is_all=true"
     )
 
     try:
@@ -181,136 +356,76 @@ if st.button("거래 데이터 불러오기 및 모델 학습"):
         st.error("API 요청에 실패했습니다.")
         st.stop()
 
-    딕셔너리 = data.json()
+    try:
+        response_payload = data.json()
+    except ValueError:
+        st.error("API 응답을 해석할 수 없습니다.")
+        st.stop()
 
-    if "data" not in 딕셔너리:
+    if not isinstance(response_payload, dict) or not isinstance(
+        response_payload.get("data"), list
+    ):
         st.error("거래 데이터를 찾을 수 없습니다.")
         st.stop()
 
-    price_list = 딕셔너리["data"]
+    price_list = response_payload["data"]
+    df, skipped_count = build_transactions_dataframe(
+        uniform_code_value, price_list, size_map, true_false_map
+    )
 
-    filename = 거래데이터수집(유니폼코드, price_list, size_map, true_false_map)
-
-    df = pd.read_csv(filename, encoding="utf-8-sig")
-
-    if os.path.exists(filename):
-        os.remove(filename)
-
-    if len(df) < 5:
-        st.warning("학습에 사용할 거래 데이터가 너무 적습니다.")
+    if len(df) < MIN_TRAINING_SAMPLES:
+        st.warning(
+            "유효한 거래 데이터가 너무 적습니다. "
+            f"최소 {MIN_TRAINING_SAMPLES}건이 필요합니다."
+        )
+        if skipped_count:
+            st.info(f"형식이 올바르지 않은 거래 {skipped_count}건을 제외했습니다.")
         st.dataframe(df)
         st.stop()
 
-    st.subheader(f"수집된 거래 데이터 개수 : {len(price_list)}")
+    st.subheader(f"학습에 사용하는 거래 데이터 개수: {len(df)}")
+    if skipped_count:
+        st.info(f"형식이 올바르지 않은 거래 {skipped_count}건을 제외했습니다.")
     st.dataframe(df)
 
     X = df.drop(["가격", "유니폼코드"], axis=1)
-    y = df["가격"]
+    y = df["가격"].astype(float).reset_index(drop=True)
     X["마킹번호"] = X["마킹번호"].astype(int).astype(str)
     X = pd.get_dummies(X, columns=["마킹번호"], prefix="등번호")
-    feature_columns = X.columns
+    X = X.astype(float).reset_index(drop=True)
+    feature_columns = list(X.columns)
 
-    X_train, X_valid, y_train, y_valid = train_test_split(
-        X, y, test_size=0.2, random_state=42
-    )
-
-    scaler = MinMaxScaler()
-    x_train_scaled = scaler.fit_transform(X_train)
-    X_valid_scaled = scaler.transform(X_valid)
-
-    rf_model = RandomForestRegressor(
-        n_estimators=200,
-        max_depth=8,
-        min_samples_split=5,
-        min_samples_leaf=2,
-        random_state=42,
-        n_jobs=-1,
-    )
-
-    gb_model = GradientBoostingRegressor(
-        n_estimators=100,
-        learning_rate=0.05,
-        max_depth=4,
-        min_samples_split=5,
-        min_samples_leaf=2,
-        random_state=42,
-    )
-
-    ridge_model = Ridge(alpha=1.0, random_state=42)
-    knn_model = KNeighborsRegressor(
-        n_neighbors=5, weights="distance", metric="minkowski", p=2
-    )
-
-    dl_model = tf.keras.Sequential(
-        [
-            tf.keras.layers.Dense(
-                64, activation="relu", input_shape=(x_train_scaled.shape[1],)
-            ),
-            tf.keras.layers.BatchNormalization(),
-            tf.keras.layers.Dense(128, activation="relu"),
-            tf.keras.layers.Dropout(0.3),
-            tf.keras.layers.Dense(64, activation="relu"),
-            tf.keras.layers.Dense(32, activation="relu"),
-            tf.keras.layers.Dense(16, activation="relu"),
-            tf.keras.layers.Dense(8, activation="relu"),
-            tf.keras.layers.Dense(1),
-        ]
-    )
-
-    models = {
-        "Random Forest": rf_model,
-        "Gradient Boosting": gb_model,
-        "Ridge": ridge_model,
-        "KNN": knn_model,
-    }
-
-    model_mae = {}
-    trained_models = {}
-
-    for name, model in models.items():
-        model.fit(x_train_scaled, y_train)
-        y_pred = model.predict(X_valid_scaled)
-        mae = mean_absolute_error(y_valid, y_pred)
-        model_mae[name] = mae
-        trained_models[name] = model
-
-    dl_model.compile(
-        optimizer="adam",
-        loss="mae",
-        metrics=["mae"],
-    )
-
-    with st.spinner("모델 학습 중입니다."):
-        early_stop = tf.keras.callbacks.EarlyStopping(
-            monitor="val_loss", patience=30, restore_best_weights=True
+    with st.spinner("교차 검증으로 모델을 비교하고 전체 데이터로 학습 중입니다."):
+        model_mae, oof_predictions, dl_epoch_counts = cross_validate_models(X, y)
+        best_model_name = min(model_mae, key=model_mae.get)
+        best_mae = model_mae[best_model_name]
+        residuals = np.abs(y.to_numpy() - oof_predictions[best_model_name])
+        prediction_interval_error = float(
+            np.percentile(residuals, PREDICTION_INTERVAL_PERCENTILE)
+        )
+        best_model, scaler = train_model_on_full_dataset(
+            best_model_name, X, y, dl_epoch_counts
         )
 
-        history = dl_model.fit(
-            x_train_scaled,
-            y_train,
-            validation_data=(X_valid_scaled, y_valid),
-            epochs=300,
-            batch_size=16,
-            callbacks=[early_stop],
-            verbose=0,
-        )
-
-    dl_pred = dl_model.predict(X_valid_scaled).flatten()
-    dl_mae = mean_absolute_error(y_valid, dl_pred)
-    model_mae["Deep Learning"] = dl_mae
-    trained_models["Deep Learning"] = dl_model
-
-    best_model_name = min(model_mae, key=model_mae.get)
-    best_model = trained_models[best_model_name]
-    best_mae = model_mae[best_model_name]
     st.session_state["model"] = best_model
     st.session_state["model_name"] = best_model_name
     st.session_state["best_mae"] = best_mae
+    st.session_state["prediction_interval_error"] = prediction_interval_error
     st.session_state["scaler"] = scaler
     st.session_state["feature_columns"] = feature_columns
-    st.success(f"""
-    모델 학습이 완료되었습니다.
-    """)
+    st.session_state["trained_uniform_code"] = uniform_code_value
+
+    result_df = pd.DataFrame(
+        {
+            "모델": model_mae.keys(),
+            "교차 검증 MAE": model_mae.values(),
+        }
+    ).sort_values("교차 검증 MAE")
+    st.dataframe(result_df, hide_index=True)
+    st.success(
+        f"모델 학습이 완료되었습니다. 선택 모델: {best_model_name} "
+        f"(교차 검증 MAE {best_mae:,.0f}원)"
+    )
 
 
 st.subheader("가격 예측")
@@ -350,6 +465,19 @@ if st.button("가격 예측하기"):
         st.warning("먼저 거래 데이터를 불러오고 모델을 학습하세요.")
         st.stop()
 
+    try:
+        current_uniform_code = int(uniform_code)
+    except ValueError:
+        st.warning("학습한 유니폼 코드를 입력한 뒤 다시 예측하세요.")
+        st.stop()
+
+    if current_uniform_code != st.session_state.get("trained_uniform_code"):
+        st.warning(
+            "현재 입력한 유니폼 코드와 학습한 코드가 다릅니다. "
+            "거래 데이터를 다시 불러와 모델을 학습하세요."
+        )
+        st.stop()
+
     best_model = st.session_state["model"]
     best_model_name = st.session_state["model_name"]
     scaler = st.session_state["scaler"]
@@ -374,21 +502,28 @@ if st.button("가격 예측하기"):
     # 학습 데이터의 column 구조와 맞추기
     feature_columns = st.session_state["feature_columns"]
 
-    user_input_df = user_input_df.reindex(columns=feature_columns, fill_value=0)
+    user_input_df = user_input_df.reindex(
+        columns=feature_columns, fill_value=0
+    ).astype(float)
 
     user_input_scaled = scaler.transform(user_input_df)
 
-    예측값 = best_model.predict(user_input_scaled)
+    prediction = best_model.predict(user_input_scaled)
 
-    predicted_price = int(round(float(np.array(예측값).flatten()[0]), -3))
-    mae = st.session_state["best_mae"]
-    low_price = int(round(predicted_price - mae * 0.5, -3))
-    high_price = int(round(predicted_price + mae * 0.5, -3))
+    predicted_price = max(
+        0, int(round(float(np.array(prediction).flatten()[0]), -3))
+    )
+    interval_error = st.session_state["prediction_interval_error"]
+    low_price = max(0, int(round(predicted_price - interval_error, -3)))
+    high_price = int(round(predicted_price + interval_error, -3))
 
     st.success(f"예측 가격: {predicted_price:,} 원")
 
     st.caption(f"예상 거래 범위: {low_price:,} ~ {high_price:,} 원")
-    st.caption(f"사용 모델: {best_model_name}")
+    st.caption(
+        f"사용 모델: {best_model_name} · 교차 검증 잔차의 "
+        f"{PREDICTION_INTERVAL_PERCENTILE}% 기준"
+    )
 st.markdown("---")
 
 st.markdown(
