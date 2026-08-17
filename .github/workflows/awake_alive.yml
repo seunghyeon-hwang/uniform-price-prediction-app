@@ -2,7 +2,9 @@ name: Keep Streamlit Apps Awake
 
 on:
   schedule:
-    - cron: '0 */12 * * *' # 12시간마다 주기적으로 실행
+    # Streamlit의 12시간 동면 기준보다 충분히 짧게 실행하고,
+    # GitHub Actions가 몰리는 정각을 피해 지연 가능성을 낮춥니다.
+    - cron: '17 */6 * * *'
   workflow_dispatch: # 수동 실행 가능
 
 jobs:
@@ -16,8 +18,34 @@ jobs:
             "https://kcar-scraper.streamlit.app"
             "https://maintenance-battle.streamlit.app"
             "https://retro-game-center.streamlit.app"
+            "https://re4mo-price-prediction.streamlit.app"
           )
+
+          failed_urls=()
           for url in "${urls[@]}"; do
-            curl -s $url > /dev/null
-            echo "Successfully pinged: $url"
+            # 캐시를 우회하고 일시적인 네트워크 오류에는 최대 3회 재시도합니다.
+            request_url="${url}?keep_alive=$(date +%s)"
+            if curl \
+              --fail \
+              --location \
+              --silent \
+              --show-error \
+              --retry 3 \
+              --retry-all-errors \
+              --retry-delay 10 \
+              --connect-timeout 20 \
+              --max-time 180 \
+              --header "Cache-Control: no-cache" \
+              --output /dev/null \
+              "$request_url"; then
+              echo "Successfully pinged: $url"
+            else
+              echo "Failed to ping: $url" >&2
+              failed_urls+=("$url")
+            fi
           done
+
+          if (( ${#failed_urls[@]} > 0 )); then
+            printf 'Keep-alive failed for: %s\n' "${failed_urls[*]}" >&2
+            exit 1
+          fi
